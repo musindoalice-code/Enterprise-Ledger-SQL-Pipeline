@@ -1,1 +1,78 @@
+-- ==============================================================================
+-- STRATEGIC LEDGER DATA ENGINEERING PIPELINE & AUDIT ARCHITECTURE
+-- TARGET: Identifying multi-tiered accounting risks, split invoices, and duplicate payments.
+-- ==============================================================================
+
+-- STEP 1: Establish localized database structure for simulation
+CREATE TABLE IF NOT EXISTS general_ledger (
+    transaction_id VARCHAR(50) PRIMARY KEY,
+    invoice_id VARCHAR(50),
+    vendor_name VARCHAR(150),
+    amount_zar DECIMAL(18, 2),
+    invoice_date DATE,
+    approved_by VARCHAR(100),
+    cost_center VARCHAR(50)
+);
+
+-- STEP 2: Seed transactional data containing intentionally engineered anomalies
+INSERT INTO general_ledger VALUES
+('TXN-101', 'INV-2026-001', 'Vodacom SA', 14500.00, '2026-03-01', 'SYSTEM_AUTO', 'IT-OPS'),
+('TXN-102', 'INV-2026-002', 'Vodacom S.A.', 14500.00, '2026-03-01', 'M_SMITH', 'IT-OPS'),
+('TXN-103', 'INV-2026-003', 'Eskom Holdings', 89200.50, '2026-03-04', 'J_DOE', 'UTILITIES'),
+('TXN-104', 'INV-2026-004', 'Escom Holdings', 89200.50, '2026-03-05', 'SYSTEM_AUTO', 'UTILITIES'),
+('TXN-105', 'INV-2026-005', 'PwC South Africa', 45000.00, '2026-03-10', 'SYSTEM_AUTO', 'AUDIT'),
+('TXN-106', 'INV-2026-006', 'PriceWaterhouseCoopers', 45000.00, '2026-03-12', 'M_SMITH', 'AUDIT'),
+('TXN-107', 'INV-2026-007', 'Caltex Fuel Corp', 62000.00, '2026-03-15', 'J_DOE', 'LOGISTICS'),
+-- Split-payment threshold bypass suspect (3 transactions totaling R147k to stay under R50k limit)
+('TXN-108', 'INV-2026-008A', 'Zimele Consulting', 49000.00, '2026-03-18', 'A_MALAN', 'STRATEGY'),
+('TXN-109', 'INV-2026-008B', 'Zimele Consulting', 49000.00, '2026-03-18', 'A_MALAN', 'STRATEGY'),
+('TXN-110', 'INV-2026-008C', 'Zimele Consulting', 49000.00, '2026-03-19', 'A_MALAN', 'STRATEGY');
+
+-- STEP 3: Multi-Tiered CTE Analytical Analytical Pipeline for Corporate Audit Exceptions
+WITH normalized_ledger AS (
+    -- Subquery component: Standardizing string layouts and tracking velocity trends
+    SELECT 
+        transaction_id,
+        invoice_id,
+        vendor_name,
+        -- Clean string boundaries for exact SQL matches where possible
+        UPPER(TRIM(REPLACE(REPLACE(vendor_name, '.', ''), 'SA', ''))) as cleaned_vendor,
+        amount_zar,
+        invoice_date,
+        approved_by,
+        cost_center,
+        -- Window function: Track running total velocity spent per cost center
+        SUM(amount_zar) OVER(PARTITION BY cost_center ORDER BY invoice_date) as cost_center_running_total
+    FROM general_ledger
+),
+velocity_risk_signals AS (
+    -- Window Function component: Identifying sequential multi-day transactional grouping
+    SELECT 
+        transaction_id,
+        invoice_id,
+        vendor_name,
+        cleaned_vendor,
+        amount_zar,
+        invoice_date,
+        approved_by,
+        -- Check if previous row had identical amount to identify split payments or system errors
+        LAG(amount_zar, 1) OVER(PARTITION BY cleaned_vendor ORDER BY invoice_date) as prev_amount,
+        LAG(invoice_date, 1) OVER(PARTITION BY cleaned_vendor ORDER BY invoice_date) as prev_date
+    FROM normalized_ledger
+)
+-- STEP 4: High-Value Materiality Isolation & Potential Approval Bypass Output
+SELECT 
+    transaction_id,
+    invoice_id,
+    vendor_name,
+    amount_zar,
+    invoice_date,
+    approved_by,
+    CASE 
+        WHEN amount_zar == prev_amount AND ABS(JULIANDAY(invoice_date) - JULIANDAY(prev_date)) <= 2 THEN 'CRITICAL RISK: Potential Duplicate/Split Invoice'
+        WHEN amount_zar >= 45000.00 AND approved_by = 'SYSTEM_AUTO' THEN 'WARNING: High-Value System Auto Approval'
+        ELSE 'Review Required - Threshold Variance'
+    END AS risk_classification
+FROM velocity_risk_signals
+WHERE amount_zar >= 10000.00;
 
